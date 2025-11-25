@@ -42,6 +42,7 @@ interface DashboardProps {
   pages: ConnectedPage[];
   setPages: React.Dispatch<React.SetStateAction<ConnectedPage[]>>;
   scheduledPosts: ScheduledPost[];
+  facebookAccount: any;
   onNavigateToReplies: (pageId: string) => void;
   onNavigateToGuide: () => void;
   isDarkMode?: boolean;
@@ -57,13 +58,13 @@ const timeRanges = [
   { id: 'all', label: 'All' },
 ];
 
-export const Dashboard: React.FC<DashboardProps> = ({ pages, setPages, scheduledPosts, onNavigateToReplies, onNavigateToGuide }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ pages, setPages, scheduledPosts, facebookAccount, onNavigateToReplies, onNavigateToGuide }) => {
   const [isTrainModalOpen, setIsTrainModalOpen] = useState(false);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
 
   // Facebook Main Profile State
   const [isProfileVisible, setIsProfileVisible] = useState(true);
-  const [isProfileConnected, setIsProfileConnected] = useState(true);
+  const isProfileConnected = facebookAccount?.is_connected || false;
 
   // Confirmation Modals State
   const [isProfileDeleteModalOpen, setIsProfileDeleteModalOpen] = useState(false); // For permanent deletion
@@ -99,43 +100,54 @@ export const Dashboard: React.FC<DashboardProps> = ({ pages, setPages, scheduled
     }
   }, [notification]);
 
-  const handleConnectFacebook = () => {
-    // 1. Retrieve App ID from Settings (LocalStorage)
-    const storedSettings = localStorage.getItem('app_settings');
-    let appId = '';
-    
-    if (storedSettings) {
-      try {
-        const parsed = JSON.parse(storedSettings);
-        appId = parsed.fbAppId;
-      } catch (e) {
-        console.error("Error reading settings", e);
+  const handleConnectFacebook = async () => {
+    const { supabase } = await import('../lib/supabase');
+    const { useAuth } = await import('../contexts/AuthContext');
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
+        setWarningMessage("Please sign in first");
+        setIsWarningModalOpen(true);
+        return;
       }
-    }
 
-    if (!appId) {
-      setWarningMessage("Missing Facebook App ID! Please go to Settings and configure your App Credentials first.");
+      const { data: settings } = await supabase
+        .from('app_settings')
+        .select('fb_app_id')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      const appId = settings?.fb_app_id;
+
+      if (!appId) {
+        setWarningMessage("Missing Facebook App ID! Please go to Settings and configure your App Credentials first.");
+        setIsWarningModalOpen(true);
+        return;
+      }
+
+      const scopes = [
+        'pages_show_list',
+        'pages_read_engagement',
+        'pages_manage_posts',
+        'pages_manage_metadata',
+        'pages_messaging',
+        'instagram_basic',
+        'instagram_manage_insights'
+      ].join(',');
+
+      const redirectUri = window.location.href.split('?')[0].split('#')[0];
+      const state = `fb_connect_${Date.now()}`;
+
+      const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}&state=${state}&response_type=token`;
+
+      window.location.href = authUrl;
+    } catch (error) {
+      console.error('Error initiating Facebook connection:', error);
+      setWarningMessage("Failed to initiate Facebook connection");
       setIsWarningModalOpen(true);
-      return;
     }
-
-    // 2. Construct OAuth URL
-    // Scopes required for page management
-    const scopes = [
-      'pages_show_list',
-      'pages_read_engagement',
-      'pages_manage_posts',
-      'pages_manage_metadata',
-      'pages_messaging'
-    ].join(',');
-
-    const redirectUri = window.location.href.split('?')[0]; // Redirect back to current page
-    const state = `fb_connect_${Date.now()}`; // Simple state param
-
-    const authUrl = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scopes}&state=${state}&response_type=token`;
-
-    // 3. Redirect User
-    window.location.href = authUrl;
   };
 
   const handleToggleAutomation = (id: string) => {
@@ -580,20 +592,20 @@ export const Dashboard: React.FC<DashboardProps> = ({ pages, setPages, scheduled
                <div className="flex flex-col sm:flex-row items-center text-center sm:text-left gap-4 sm:gap-6">
                   {/* Avatar */}
                   <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-slate-800 flex items-center justify-center border-4 border-slate-700 shrink-0 relative shadow-md overflow-hidden">
-                      <img 
-                          src="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&h=200" 
-                          alt="Anne Marie" 
+                      <img
+                          src={facebookAccount?.avatar_url || "https://ui-avatars.com/api/?name=User&background=6366f1&color=fff"}
+                          alt={facebookAccount?.name || "User"}
                           className="w-full h-full object-cover"
                       />
                       <div className="absolute bottom-0 right-0 bg-blue-600 rounded-full p-1.5 border-4 border-surface shadow-sm">
                           <Facebook size={14} style={{ color: 'white' }} />
                       </div>
                   </div>
-                  
+
                   {/* Profile Info */}
                   <div>
-                      <h3 className="text-xl sm:text-2xl font-bold text-white">Anne Marie</h3>
-                      <p className="text-slate-400 mt-1 text-sm sm:text-base">Manage permissions and ad accounts</p>
+                      <h3 className="text-xl sm:text-2xl font-bold text-white">{facebookAccount?.name || "Facebook User"}</h3>
+                      <p className="text-slate-400 mt-1 text-sm sm:text-base">{pages.length} {pages.length === 1 ? 'page' : 'pages'} connected</p>
                       <div className="flex items-center justify-center sm:justify-start gap-2 mt-3">
                           {isProfileConnected ? (
                               <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-500 text-sm sm:text-base font-semibold bg-emerald-500/10 px-3 py-1 rounded-full border border-emerald-500/50">

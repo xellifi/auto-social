@@ -35,6 +35,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const signUp = async (email: string, password: string, name: string) => {
+    // Create the auth user first
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -42,17 +43,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (error) throw error;
 
-    if (data.user) {
-      const { error: profileError } = await supabase
-        .from('user_profiles')
-        .insert({
-          id: data.user.id,
-          email: data.user.email!,
-          name,
-        });
-
-      if (profileError) throw profileError;
+    // After signUp, the user may or may not be immediately authenticated depending on
+    // whether email confirmations are required. We must ensure the client is authenticated
+    // (so auth.uid() is available for RLS) before inserting into `user_profiles`.
+    if (!data || !data.user) {
+      throw new Error('Sign up did not return a user');
     }
+
+    // Try to get the current session
+    let sessionResp = await supabase.auth.getSession();
+    let session = sessionResp.data.session;
+
+    // If there's no session, try signing in (useful when confirm email is disabled)
+    if (!session) {
+      const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password });
+      if (signInErr) {
+        // Likely requires email confirmation. Inform caller so they can confirm.
+        throw new Error(
+          'Sign up succeeded but the account is not authenticated yet. Please check your email to confirm your account before signing in.'
+        );
+      }
+
+      sessionResp = await supabase.auth.getSession();
+      session = sessionResp.data.session;
+    }
+
+    // If still no session, abort to avoid RLS violations
+    if (!session || !session.user) {
+      throw new Error('Unable to obtain authenticated session after sign up');
+    }
+
+    // Now insert the profile as the authenticated user
+    const { error: profileError } = await supabase
+      .from('user_profiles')
+      .insert({
+        id: data.user.id,
+        email: data.user.email!,
+        name,
+      });
+
+    if (profileError) throw profileError;
   };
 
   const signIn = async (email: string, password: string) => {
